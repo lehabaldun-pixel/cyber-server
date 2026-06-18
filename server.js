@@ -5,20 +5,19 @@ const port = process.env.PORT || 10000;
 const server = http.createServer();
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
-// Постоянная база данных пользователей в памяти сервера (Логин -> Пароль)
+// База данных пользователей (сохраняется, пока сервер не перезагружен)
 const registeredUsers = new Map();
-// Активные сокеты онлайн-пользователей (Логин -> WebSocket)
 const activeConnections = new Map();
 
 wss.on('connection', (ws) => {
     let authenticatedUser = null;
-    console.log('[SYSTEM] Новое кибер-подключение.');
+    console.log('[WS] Новое подключение');
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. НАДЕЖНАЯ АВТОРИЗАЦИЯ И ЗАЩИТА АККАУНТА
+            // МОЩНАЯ КИБЕР-АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ
             if (data.type === 'auth') {
                 const { userId, password } = data;
 
@@ -28,7 +27,7 @@ wss.on('connection', (ws) => {
                 }
 
                 if (registeredUsers.has(userId)) {
-                    // Логин занят -> проверяем пароль
+                    // Пользователь уже есть -> СВЕРЯЕМ ПАРОЛЬ (Защита аккаунта)
                     const savedPassword = registeredUsers.get(userId);
                     if (savedPassword === password) {
                         authenticatedUser = userId;
@@ -36,47 +35,57 @@ wss.on('connection', (ws) => {
                         console.log(`[AUTH] Успешный вход: ${userId}`);
                         ws.send(JSON.stringify({ type: 'auth_response', success: true, status: 'LOGGED_IN' }));
                     } else {
-                        console.log(`[AUTH] ОТКАЗ: Неверный пароль для занятого ID: ${userId}`);
+                        console.log(`[AUTH] Отказ: неверный пароль для ${userId}`);
                         ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'WRONG_PASSWORD_OR_ID_TAKEN' }));
                     }
                 } else {
-                    // Логин свободен -> Регистрация (привязываем пароль к нику навсегда)
+                    // Аккаунт свободен -> Создаем и намертво бронируем за вами
                     registeredUsers.set(userId, password);
                     authenticatedUser = userId;
                     activeConnections.set(userId, ws);
-                    console.log(`[REG] Логин "${userId}" успешно закреплен за пользователем.`);
+                    console.log(`[REG] Забронирован новый аккаунт: ${userId}`);
                     ws.send(JSON.stringify({ type: 'auth_response', success: true, status: 'REGISTERED' }));
                 }
+                return;
             }
 
-            // 2. ЕДИНАЯ МАРШРУТИЗАЦИЯ (Сообщения, Медиа, Сигналы WebRTC)
-            if (authenticatedUser && data.targetId) {
-                const targetSocket = activeConnections.get(data.targetId);
-                data.senderId = authenticatedUser; // Сервер гарантирует подлинность отправителя
+            // ИСПРАВЛЕНО: ГЛОБАЛЬНАЯ МАРШРУТИЗАЦИЯ (Сообщения, звонки, медиа)
+            if (authenticatedUser) {
+                const receiverId = data.targetId || data.receiverId;
+                if (!receiverId) return;
+
+                const targetSocket = activeConnections.get(receiverId);
+                data.senderId = authenticatedUser; // Сервер гарантирует подлинность автора
 
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
                     targetSocket.send(JSON.stringify(data));
-                    console.log(`[ROUTE] Сигнал "${data.type}" переслан от ${authenticatedUser} к ${data.targetId}`);
+                    console.log(`[ROUTE] Успешно переслано от ${authenticatedUser} к ${receiverId} (Тип: ${data.type || data.msgType})`);
                 } else {
-                    console.log(`[ROUTE] Получатель ${data.targetId} оффлайн.`);
-                    if (data.type === 'message') {
-                        ws.send(JSON.stringify({ type: 'message', senderId: 'SYSTEM', msgType: 'text', content: `Пользователь ${data.targetId} сейчас оффлайн.` }));
+                    console.log(`[ROUTE] Абонент ${receiverId} оффлайн.`);
+                    // Если это текстовое сообщение, возвращаем ошибку отправителю
+                    if (data.type === 'message' || data.type === 'text') {
+                        ws.send(JSON.stringify({
+                            type: 'message',
+                            senderId: 'SYSTEM',
+                            msgType: 'text',
+                            content: `Runner [${receiverId}] сейчас оффлайн. Сигнал потерян.`
+                        }));
                     }
                 }
             }
         } catch (e) {
-            console.error('[ERR] Ошибка обработки пакета:', e.message);
+            console.error('Ошибка сервера:', e.message);
         }
     });
 
     ws.on('close', () => {
         if (authenticatedUser) {
             activeConnections.delete(authenticatedUser);
-            console.log(`[DISCONNECT] Руннер ${authenticatedUser} покинул сеть.`);
+            console.log(`[DISCONNECT] Отключен: ${authenticatedUser}`);
         }
     });
 });
 
 server.listen(port, () => {
-    console.log(`=== СЕРВЕР ЗАПУЩЕН НА ПОРТУ ${port} ===`);
+    console.log(`=== СЕРВЕР ОБНОВЛЕН И РАБОТАЕТ НА ПОРТУ ${port} ===`);
 });
