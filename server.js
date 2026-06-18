@@ -1,38 +1,24 @@
 const http = require('http');
 const WebSocket = require('ws');
 
-// ИСПРАВЛЕНО: Render сам передает порт. Если его нет, используем 10000
 const port = process.env.PORT || 10000;
-
 const server = http.createServer();
-
-// ИСПРАВЛЕНО: Добавлен path: '/ws', чтобы сокеты со со смартфона подключались без ошибок
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
-// База данных пользователей в памяти
+// Постоянная база данных пользователей в памяти сервера (Логин -> Пароль)
 const registeredUsers = new Map();
-
-// Хранилище активных сетевых соединений
+// Активные сокеты онлайн-пользователей (Логин -> WebSocket)
 const activeConnections = new Map();
 
 wss.on('connection', (ws) => {
     let authenticatedUser = null;
-    console.log('[WS] Новое сырое подключение установлено');
+    console.log('[SYSTEM] Новое кибер-подключение.');
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
-            // ЛОГИКА СОВМЕСТИМОСТИ: Обрабатываем тип 'join', который шлет ваш Android-код
-            if (data.type === 'join') {
-                authenticatedUser = data.userId;
-                activeConnections.set(authenticatedUser, ws);
-                console.log(`[WS] Пользователь "${authenticatedUser}" зашел в сеть по протоколу JOIN.`);
-                ws.send(JSON.stringify({ type: 'text', senderId: 'SYSTEM', content: 'CONNECTED_TO_CYBER_NODE' }));
-                return;
-            }
-
-            // ЛОГИКА РЕГИСТРАЦИИ И ВХОДА (AUTH)
+            // 1. НАДЕЖНАЯ АВТОРИЗАЦИЯ И ЗАЩИТА АККАУНТА
             if (data.type === 'auth') {
                 const { userId, password } = data;
 
@@ -42,55 +28,55 @@ wss.on('connection', (ws) => {
                 }
 
                 if (registeredUsers.has(userId)) {
-                    const user = registeredUsers.get(userId);
-                    if (user.password === password) {
+                    // Логин занят -> проверяем пароль
+                    const savedPassword = registeredUsers.get(userId);
+                    if (savedPassword === password) {
                         authenticatedUser = userId;
                         activeConnections.set(userId, ws);
-                        console.log(`[AUTH] Пользователь ${userId} успешно вошел в сеть.`);
+                        console.log(`[AUTH] Успешный вход: ${userId}`);
                         ws.send(JSON.stringify({ type: 'auth_response', success: true, status: 'LOGGED_IN' }));
                     } else {
-                        console.log(`[AUTH] Неверный пароль для ${userId}`);
-                        ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'WRONG_PASSWORD' }));
+                        console.log(`[AUTH] ОТКАЗ: Неверный пароль для занятого ID: ${userId}`);
+                        ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'WRONG_PASSWORD_OR_ID_TAKEN' }));
                     }
                 } else {
-                    registeredUsers.set(userId, { password: password, regTime: Date.now() });
+                    // Логин свободен -> Регистрация (привязываем пароль к нику навсегда)
+                    registeredUsers.set(userId, password);
                     authenticatedUser = userId;
                     activeConnections.set(userId, ws);
-                    console.log(`[REG] Создан новый кибер-аккаунт: ${userId}`);
+                    console.log(`[REG] Логин "${userId}" успешно закреплен за пользователем.`);
                     ws.send(JSON.stringify({ type: 'auth_response', success: true, status: 'REGISTERED' }));
                 }
             }
 
-            // ПЕРЕСЫЛКА СООБЩЕНИЙ И СИГНАЛОВ ЗВОНКА (text, file, image, offer, answer, ice)
-            if (authenticatedUser) {
-                // Если тип сообщения 'text', 'file', 'image' или WebRTC сигналы звонка
-                if (data.type === 'text' || data.type === 'file' || data.type === 'image' || data.type === 'offer' || data.type === 'answer' || data.type === 'ice') {
-                    const receiverId = data.targetId || data.receiverId;
-                    const targetSocket = activeConnections.get(receiverId);
+            // 2. ЕДИНАЯ МАРШРУТИЗАЦИЯ (Сообщения, Медиа, Сигналы WebRTC)
+            if (authenticatedUser && data.targetId) {
+                const targetSocket = activeConnections.get(data.targetId);
+                data.senderId = authenticatedUser; // Сервер гарантирует подлинность отправителя
 
-                    if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                        data.senderId = authenticatedUser; // Фиксируем отправителя
-                        targetSocket.send(JSON.stringify(data));
-                        console.log(`[ROUTE] Переслано сообщение типа "${data.type}" от "${authenticatedUser}" к "${receiverId}"`);
-                    } else {
-                        console.log(`[ROUTE] Получатель ${receiverId} оффлайн. Тип: ${data.type}`);
+                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+                    targetSocket.send(JSON.stringify(data));
+                    console.log(`[ROUTE] Сигнал "${data.type}" переслан от ${authenticatedUser} к ${data.targetId}`);
+                } else {
+                    console.log(`[ROUTE] Получатель ${data.targetId} оффлайн.`);
+                    if (data.type === 'message') {
+                        ws.send(JSON.stringify({ type: 'message', senderId: 'SYSTEM', msgType: 'text', content: `Пользователь ${data.targetId} сейчас оффлайн.` }));
                     }
                 }
             }
         } catch (e) {
-            console.error('Ошибка обработки сообщения:', e);
+            console.error('[ERR] Ошибка обработки пакета:', e.message);
         }
     });
 
     ws.on('close', () => {
         if (authenticatedUser) {
             activeConnections.delete(authenticatedUser);
-            console.log(`[DISCONNECT] Пользователь ${authenticatedUser} отключился.`);
+            console.log(`[DISCONNECT] Руннер ${authenticatedUser} покинул сеть.`);
         }
     });
 });
 
-// ИСПРАВЛЕНО: Слушаем динамический порт вместо жесткого 3000
 server.listen(port, () => {
-    console.log(`=== КИБЕР-СЕРВЕР УСПЕШНО ЗАПУЩЕН НА ПОРТУ ${port} ===`);
+    console.log(`=== СЕРВЕР ЗАПУЩЕН НА ПОРТУ ${port} ===`);
 });
