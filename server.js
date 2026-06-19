@@ -3,9 +3,8 @@ const WebSocket = require('ws');
 
 const port = process.env.PORT || 10000;
 const server = http.createServer();
-const wss = new WebSocket.Server({ server, path: '/ws' });
+const wss = new WebSocket.Server({ server, path: '/ws' }); // Android должен стучаться именно сюда!
 
-// База данных пользователей (теперь сохраняется между сессиями в памяти)
 const registeredUsers = new Map(); 
 const activeConnections = new Map();
 
@@ -27,7 +26,6 @@ wss.on('connection', (ws) => {
                 }
 
                 if (registeredUsers.has(userId)) {
-                    // Пользователь существует -> Проверяем пароль
                     const savedPassword = registeredUsers.get(userId);
                     if (savedPassword === password) {
                         authenticatedUser = userId;
@@ -40,7 +38,6 @@ wss.on('connection', (ws) => {
                         ws.close();
                     }
                 } else {
-                    // Пользователя нет -> Регистрируем и привязываем пароль навсегда к нему
                     registeredUsers.set(userId, password);
                     authenticatedUser = userId;
                     activeConnections.set(userId, ws);
@@ -50,28 +47,27 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // ВСЕ ПОСЛЕДУЮЩИЕ ДЕЙСТВИЯ ДОСТУПНЫ ТОЛЬКО АВТОРИЗОВАННЫМ
             if (!authenticatedUser) return;
 
-            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Offer, Answer, ICE)
-            if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice') {
+            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Offer, Answer, ICE, Hangup)
+            // ИСПРАВЛЕНО: Добавлен тип 'hangup', чтобы звонок прерывался у обоих пользователей
+            if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice' || data.type === 'hangup') {
                 const targetId = data.targetId;
                 const targetSocket = activeConnections.get(targetId);
 
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    data.senderId = authenticatedUser; // Гарантируем подлинность автора
+                    data.senderId = authenticatedUser; 
                     targetSocket.send(JSON.stringify(data));
                     console.log(`[SIGNAL] Сигнал ${data.type} переслан от ${authenticatedUser} к ${targetId}`);
                 }
             }
 
-            // 3. ПЕРЕСЫЛКА ТЕКСТА, ФОТО И ГОЛОСОВЫХ (Тип 'message')
+            // 3. ПЕРЕСЫЛКА ТЕКСТА, ФОТО И ГОЛОСОВЫХ
             if (data.type === 'message') {
                 const targetId = data.receiverId;
                 const targetSocket = activeConnections.get(targetId);
 
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    // Формируем чистый пакет для получателя
                     const payload = {
                         type: 'message',
                         senderId: authenticatedUser,
