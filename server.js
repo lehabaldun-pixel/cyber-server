@@ -47,20 +47,33 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // ВСЕ ПОСЛЕДУЮЩИЕ ДЕЙСТВИЯ ДОСТУПНЫ ТОЛЬКО АВТОРИЗОВАННЫМ ПОЛЬЗОВАТЕЛЯМ
             if (!authenticatedUser) return;
 
-            // ИСПРАВЛЕНО: Блок самоликвидации теперь стоит на правильном месте и защищен авторизацией
+            // ПРОТОКОЛ СИНХРОННОГО УДАЛЕНИЯ ЧАТА
+            if (data.type === 'delete_chat_node') {
+                const targetSocket = activeConnections.get(data.targetId);
+                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+                    targetSocket.send(JSON.stringify({
+                        type: 'message',
+                        senderId: 'SYSTEM',
+                        msgType: 'text',
+                        content: `ВНИМАНИЕ: Пользователь [${authenticatedUser}] изолировал ваш канал связи.`
+                    }));
+                }
+                return;
+            }
+
+            // ПОЛНОЕ УНИЧТОЖЕНИЕ ПРОФИЛЯ
             if (data.type === 'delete_account') {
                 registeredUsers.delete(authenticatedUser);
                 activeConnections.delete(authenticatedUser);
-                console.log(`[SYS_ALERT] Аккаунт полностью стерт из матрицы: ${authenticatedUser}`);
+                console.log(`[SYS_ALERT] Полная деструкция: ${authenticatedUser}`);
                 ws.send(JSON.stringify({ type: 'account_deleted_confirm' }));
                 ws.close();
                 return;
             }
 
-            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Offer, Answer, ICE, Hangup)
+            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Офферы теперь содержат флагisVideo)
             if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice' || data.type === 'hangup') {
                 const targetId = data.targetId;
                 const targetSocket = activeConnections.get(targetId);
@@ -68,11 +81,11 @@ wss.on('connection', (ws) => {
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
                     data.senderId = authenticatedUser; 
                     targetSocket.send(JSON.stringify(data));
-                    console.log(`[SIGNAL] Сигнал ${data.type} переслан от ${authenticatedUser} к ${targetId}`);
+                    console.log(`[SIGNAL] ${data.type} от ${authenticatedUser} к ${targetId}`);
                 }
             }
 
-            // 3. ПЕРЕСЫЛКА ТЕКСТА, ФОТО И ГОЛОСОВЫХ
+            // 3. ПЕРЕСЫЛКА СООБЩЕНИЙ
             if (data.type === 'message') {
                 const targetId = data.receiverId;
                 const targetSocket = activeConnections.get(targetId);
@@ -85,20 +98,18 @@ wss.on('connection', (ws) => {
                         content: data.content
                     };
                     targetSocket.send(JSON.stringify(payload));
-                    console.log(`[MSG] Переслано от ${authenticatedUser} к ${targetId}. Тип: ${data.msgType}`);
                 } else {
-                    console.log(`[MSG] Получатель ${targetId} оффлайн.`);
                     ws.send(JSON.stringify({
                         type: 'message',
                         senderId: 'SYSTEM',
                         msgType: 'text',
-                        content: `Пользователь [${targetId}] сейчас оффлайн. Доставка невозможна.`
+                        content: `Абонент [${targetId}] вне зоны доступа терминала.`
                     }));
                 }
             }
 
         } catch (e) {
-            console.error('[ERR] Сбой обработки пакета:', e.message);
+            console.error('[ERR] Критическая ошибка ядра:', e.message);
         }
     });
 
