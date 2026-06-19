@@ -19,7 +19,16 @@ wss.on('connection', (ws) => {
             // 1. ЗАЩИЩЕННАЯ АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ
             if (data.type === 'auth') {
                 const { userId, password } = data;
-
+ if (data.type === 'delete_account') {
+                if (authenticatedUser) {
+                    registeredUsers.delete(authenticatedUser);
+                    activeConnections.delete(authenticatedUser);
+                    console.log(`[SYS_ALERT] Аккаунт полностью стерт из матрицы: ${authenticatedUser}`);
+                    ws.send(JSON.stringify({ type: 'account_deleted_confirm' }));
+                    ws.close();
+                }
+                return;
+            }
                 if (!userId || !password) {
                     ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'EMPTY_FIELDS' }));
                     return;
