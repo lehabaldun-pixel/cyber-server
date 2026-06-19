@@ -2,7 +2,13 @@ const http = require('http');
 const WebSocket = require('ws');
 
 const port = process.env.PORT || 10000;
-const server = http.createServer();
+
+// ИСПРАВЛЕНО: Добавлен обработчик HTTP-запросов, чтобы Android-радар переключался в READY
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('=== MATRIX_CORE: ONLINE AND READY ===');
+});
+
 const wss = new WebSocket.Server({ server, path: '/ws' }); 
 
 const registeredUsers = new Map(); 
@@ -51,7 +57,8 @@ wss.on('connection', (ws) => {
 
             // ПРОТОКОЛ СИНХРОННОГО УДАЛЕНИЯ ЧАТА
             if (data.type === 'delete_chat_node') {
-                const targetSocket = activeConnections.get(data.targetId);
+                const targetId = data.targetId;
+                const targetSocket = activeConnections.get(targetId);
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
                     targetSocket.send(JSON.stringify({
                         type: 'message',
@@ -73,7 +80,7 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Офферы теперь содержат флагisVideo)
+            // 2. МАРШРУТИЗАЦИЯ СИГНАЛОВ ЗВОНКА (Offer, Answer, ICE, Hangup)
             if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice' || data.type === 'hangup') {
                 const targetId = data.targetId;
                 const targetSocket = activeConnections.get(targetId);
