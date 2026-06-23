@@ -22,19 +22,14 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
 
-            // 1. ЗАЩИЩЕННАЯ АВТОРИЗАЦИЯ И РЕГИСТРАЦИЯ
             if (data.type === 'auth') {
                 const { userId, password } = data;
-
                 if (!userId || !password) {
                     ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'EMPTY_FIELDS' }));
                     return;
                 }
 
-                // Вспомогательная функция для безопасного сохранения новой сессии
                 const handleSuccessfulAuth = (statusType) => {
-                    // ИСПРАВЛЕНО: Если этот юзер уже сидит в сети с другого сокета, 
-                    // принудительно закрываем его старое соединение, чтобы телефон не зависал в ложном онлайне!
                     if (activeConnections.has(userId)) {
                         const oldSocket = activeConnections.get(userId);
                         if (oldSocket && oldSocket.readyState === WebSocket.OPEN) {
@@ -42,7 +37,6 @@ wss.on('connection', (ws) => {
                             oldSocket.close(1000, 'Session replaced');
                         }
                     }
-
                     authenticatedUser = userId;
                     activeConnections.set(userId, ws);
                     ws.send(JSON.stringify({ type: 'auth_response', success: true, status: statusType }));
@@ -51,16 +45,13 @@ wss.on('connection', (ws) => {
                 if (registeredUsers.has(userId)) {
                     const savedPassword = registeredUsers.get(userId);
                     if (savedPassword === password) {
-                        console.log(`[AUTH] Успешный вход: ${userId}`);
                         handleSuccessfulAuth('LOGGED_IN');
                     } else {
-                        console.log(`[AUTH] ОТКАЗАНО: Неверный пароль для ${userId}`);
                         ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'WRONG_PASSWORD' }));
                         ws.close();
                     }
                 } else {
                     registeredUsers.set(userId, password);
-                    console.log(`[REG] Занят новый RUNNER_ID: ${userId}`);
                     handleSuccessfulAuth('REGISTERED');
                 }
                 return;
@@ -85,7 +76,6 @@ wss.on('connection', (ws) => {
             if (data.type === 'delete_account') {
                 registeredUsers.delete(authenticatedUser);
                 activeConnections.delete(authenticatedUser);
-                console.log(`[SYS_ALERT] Полная деструкция: ${authenticatedUser}`);
                 ws.send(JSON.stringify({ type: 'account_deleted_confirm' }));
                 ws.close();
                 return;
@@ -94,34 +84,46 @@ wss.on('connection', (ws) => {
             if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice' || data.type === 'hangup') {
                 const targetId = data.targetId;
                 const targetSocket = activeConnections.get(targetId);
-
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    data.senderId = authenticatedUser; 
+                    data.senderId = authenticatedUser;
                     targetSocket.send(JSON.stringify(data));
-                    console.log(`[SIGNAL] ${data.type} от ${authenticatedUser} к ${targetId}`);
                 }
             }
 
             if (data.type === 'message') {
                 const targetId = data.receiverId;
                 const targetSocket = activeConnections.get(targetId);
-
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    const payload = {
+                    targetSocket.send(JSON.stringify({
                         type: 'message',
                         senderId: authenticatedUser,
                         msgType: data.msgType,
                         content: data.content
-                    };
-                    targetSocket.send(JSON.stringify(payload));
+                    }));
                 } else {
                     ws.send(JSON.stringify({
                         type: 'message',
                         senderId: 'SYSTEM',
                         msgType: 'text',
-                        content: `Абонент [${targetId}] вне зоны доступа терминала.`
+                        content: `Абонет [${targetId}] вне зоны доступа терминала.`
                     }));
                 }
+            }
+
+            if (data.type === 'video_msg') {
+                const targetSocket = activeConnections.get(authenticatedUser);
+                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+                    targetSocket.send(JSON.stringify({
+                        type: 'message',
+                        senderId: authenticatedUser,
+                        msg제: 'video_msg',
+                        content: data.content
+                    }));
+                }
+            }
+
+            if (data.type === 'delete_node_local') {
+                // Это команда только для клиента, сервер её игнорирует
             }
 
         } catch (e) {
@@ -133,7 +135,6 @@ wss.on('connection', (ws) => {
         if (authenticatedUser) {
             if (activeConnections.get(authenticatedUser) === ws) {
                 activeConnections.delete(authenticatedUser);
-                console.log(`[DISCONNECT] Сессия закрыта: ${authenticatedUser}`);
             }
         }
     });
