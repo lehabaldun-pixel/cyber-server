@@ -3,7 +3,6 @@ const WebSocket = require('ws');
 
 const port = process.env.PORT || 10000;
 
-// HTTP-обработчик для мгновенного переключения радара на Android в READY
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('=== MATRIX_CORE: ONLINE AND READY ===');
@@ -16,12 +15,12 @@ const activeConnections = new Map();
 
 wss.on('connection', (ws) => {
     let authenticatedUser = null;
-    console.log('[SERVER] Новое подключение к матрице.');
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
+            // 1. Авторизация
             if (data.type === 'auth') {
                 const { userId, password } = data;
                 if (!userId || !password) {
@@ -43,8 +42,7 @@ wss.on('connection', (ws) => {
                 };
 
                 if (registeredUsers.has(userId)) {
-                    const savedPassword = registeredUsers.get(userId);
-                    if (savedPassword === password) {
+                    if (registeredUsers.get(userId) === password) {
                         handleSuccessfulAuth('LOGGED_IN');
                     } else {
                         ws.send(JSON.stringify({ type: 'auth_response', success: false, error: 'WRONG_PASSWORD' }));
@@ -59,20 +57,7 @@ wss.on('connection', (ws) => {
 
             if (!authenticatedUser) return;
 
-            if (data.type === 'delete_chat_node') {
-                const targetId = data.targetId;
-                const targetSocket = activeConnections.get(targetId);
-                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    targetSocket.send(JSON.stringify({
-                        type: 'message',
-                        senderId: 'SYSTEM',
-                        msgType: 'text',
-                        content: `ВНИМАНИЕ: Пользователь [${authenticatedUser}] изолировал ваш канал связи.`
-                    }));
-                }
-                return;
-            }
-
+            // 2. Полное удаление аккаунта
             if (data.type === 'delete_account') {
                 registeredUsers.delete(authenticatedUser);
                 activeConnections.delete(authenticatedUser);
@@ -81,61 +66,33 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            if (data.type === 'offer' || data.type === 'answer' || data.type === 'ice' || data.type === 'hangup') {
-                const targetId = data.targetId;
+            // 3. Универсальный пересылатель для ВСЕХ остальных пакетов
+            // (message, typing, read_receipt, delete_msg, edit_msg, reaction, offer, answer, ice, hangup)
+            const targetId = data.targetId || data.receiverId;
+            if (targetId) {
                 const targetSocket = activeConnections.get(targetId);
                 if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
+                    // Подменяем отправителя на реального юзера и пересылаем пакет ЦЕЛИКОМ
                     data.senderId = authenticatedUser;
                     targetSocket.send(JSON.stringify(data));
-                }
-            }
-
-            if (data.type === 'message') {
-                const targetId = data.receiverId;
-                const targetSocket = activeConnections.get(targetId);
-                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    targetSocket.send(JSON.stringify({
-                        type: 'message',
-                        senderId: authenticatedUser,
-                        msgType: data.msgType,
-                        content: data.content
-                    }));
-                } else {
+                } else if (data.type === 'message') {
+                    // Если сообщение не доставлено, отправляем System сообщение обратно
                     ws.send(JSON.stringify({
                         type: 'message',
                         senderId: 'SYSTEM',
                         msgType: 'text',
-                        content: `Абонет [${targetId}] вне зоны доступа терминала.`
+                        content: `Абонент [${targetId}] вне зоны доступа терминала.`
                     }));
                 }
             }
-
-            if (data.type === 'video_msg') {
-                const targetSocket = activeConnections.get(authenticatedUser);
-                if (targetSocket && targetSocket.readyState === WebSocket.OPEN) {
-                    targetSocket.send(JSON.stringify({
-                        type: 'message',
-                        senderId: authenticatedUser,
-                        msg제: 'video_msg',
-                        content: data.content
-                    }));
-                }
-            }
-
-            if (data.type === 'delete_node_local') {
-                // Это команда только для клиента, сервер её игнорирует
-            }
-
         } catch (e) {
             console.error('[ERR] Критическая ошибка ядра:', e.message);
         }
     });
 
     ws.on('close', () => {
-        if (authenticatedUser) {
-            if (activeConnections.get(authenticatedUser) === ws) {
-                activeConnections.delete(authenticatedUser);
-            }
+        if (authenticatedUser && activeConnections.get(authenticatedUser) === ws) {
+            activeConnections.delete(authenticatedUser);
         }
     });
 });
